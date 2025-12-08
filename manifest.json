@@ -2,7 +2,10 @@
   "name": "Gestion d'Émargement - Cyrus Herez",
   "short_name": "Émargement",
   "description": "Application de gestion d'émargement pour événements",
-  "start_url": "/",
+
+  "start_url": "/emargement-app/",
+  "scope": "/emargement-app/",
+
   "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#2563eb",
@@ -28,7 +31,7 @@
       "name": "Scanner QR Code",
       "short_name": "Scanner",
       "description": "Scanner un QR code pour émarger",
-      "url": "/?action=scan",
+      "url": "/emargement-app/?action=scan",
       "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
     }
   ]
