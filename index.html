@@ -454,159 +454,175 @@
                 }
             };
 
-            const handleFileUpload = (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
+ const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
 
-                // Vérifier le type de fichier
-                const validTypes = [
-                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    'application/vnd.ms-excel',
-                    'application/vnd.oasis.opendocument.spreadsheet'
-                ];
-                
-                if (!validTypes.includes(file.type) && !file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
-                    alert('⚠️ Veuillez sélectionner un fichier Excel (.xlsx ou .xls)');
-                    return;
-                }
+    // ✅ Vérification plus tolérante des types de fichiers
+    const validMimeTypes = [
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-excel',
+        'application/vnd.oasis.opendocument.spreadsheet',
+        'text/csv',
+        'application/vnd.ms-excel.sheet.macroEnabled.12' // .xlsm
+    ];
 
-                setImporting(true);
-                const reader = new FileReader();
-                
-                reader.onload = (evt) => {
-                    try {
-                        const data = new Uint8Array(evt.target.result);
-                        const workbook = XLSX.read(data, { type: 'array' });
-                        
-                        if (!workbook.SheetNames.length) {
-                            throw new Error('Le fichier Excel est vide');
-                        }
-                        
-                        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-                        const rows = XLSX.utils.sheet_to_json(firstSheet);
+    const validExtensions = ['.xlsx', '.xls', '.xlsm', '.ods', '.csv'];
+    const lowerName = file.name.toLowerCase();
+    const hasValidExtension = validExtensions.some(ext => lowerName.endsWith(ext));
 
-                        console.log('📊 Nombre de lignes trouvées:', rows.length);
-                        
-                        if (rows.length === 0) {
-                            alert('⚠️ Le fichier Excel ne contient aucune donnée');
-                            setImporting(false);
-                            return;
-                        }
+    if (!validMimeTypes.includes(file.type) && !hasValidExtension) {
+        alert('⚠️ Veuillez sélectionner un fichier Excel (.xlsx, .xls, .xlsm, .ods) ou un CSV');
+        return;
+    }
 
-                        // Détecter le nom de l'événement
-                        if (rows.length > 0 && rows[0]['Événement']) {
-                            const eventName = rows[0]['Événement'];
-                            setAutoEventName(eventName);
-                            setFormData({...formData, name: eventName});
-                            console.log('✅ Événement détecté:', eventName);
-                        }
+    setImporting(true);
+    const reader = new FileReader();
+    
+    reader.onload = (evt) => {
+        try {
+            const data = new Uint8Array(evt.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            
+            if (!workbook.SheetNames.length) {
+                throw new Error('Le fichier Excel est vide');
+            }
+            
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(firstSheet);
 
-                        // Log des colonnes disponibles pour debug
-                        console.log('📋 Colonnes détectées:', Object.keys(rows[0]));
+            console.log('📊 Nombre de lignes trouvées:', rows.length);
+            
+            if (rows.length === 0) {
+                alert('⚠️ Le fichier Excel ne contient aucune donnée');
+                setImporting(false);
+                return;
+            }
 
-                        const imported = rows
-                            .map((row, index) => {
-                                // Recherche flexible de l'ID d'inscription
-                                const rawId =
-                                    row["ID d'inscription"] ??
-                                    row["Id d'inscription"] ??
-                                    row["ID Inscription"] ??
-                                    row["Id Inscription"] ??
-                                    row["ID_inscription"] ??
-                                    row["id_inscription"] ??
-                                    row.ID ??
-                                    row.id;
+            // ✅ Nom d’événement (inchangé)
+            if (rows.length > 0 && rows[0]['Événement']) {
+                const eventName = rows[0]['Événement'];
+                setAutoEventName(eventName);
+                setFormData({...formData, name: eventName});
+                console.log('✅ Événement détecté:', eventName);
+            }
 
-                                if (!rawId) {
-                                    console.warn(`⚠️ Ligne ${index + 1}: Pas d'ID d'inscription`);
-                                    return null;
-                                }
+            console.log('📋 Colonnes détectées:', Object.keys(rows[0]));
 
-                                const inscriptionId = String(rawId).trim();
+            const imported = rows
+                .map((row, index) => {
+                    // ✅ Gestion des apostrophes ASCII ET typographiques
+                    // et ajout des variantes manquantes de l’ancienne version
+                    const rawId =
+                        row["ID d'inscription"] ??
+                        row["Id d'inscription"] ??
+                        row["Id d’inscription"] ??      // ← variante perdue, réintroduite
+                        row["ID d’inscription"] ??      // ← variante perdue, réintroduite
+                        row["ID Inscription"] ??
+                        row["Id Inscription"] ??
+                        row["ID_inscription"] ??
+                        row["id_inscription"] ??
+                        row.ID ??
+                        row.id;
 
-                                // Recherche flexible du contact
-                                const contact = (
-                                    row["Contact"] ?? 
-                                    row["Nom"] ?? 
-                                    row["Nom complet"] ?? 
-                                    row.contact ?? 
-                                    row.nom ?? 
-                                    ''
-                                ).toString().trim();
-
-                                // Recherche flexible de l'email
-                                const email = (
-                                    row["Adresse email (Contact) (Relation)"] ??
-                                    row["Adresse email"] ??
-                                    row["Email"] ??
-                                    row["E-mail"] ??
-                                    row["Mail"] ??
-                                    row.email ??
-                                    row.mail ??
-                                    ''
-                                ).toString().trim();
-
-                                // Recherche flexible du gérant
-                                const gerant = (
-                                    row["Gérant (Contact) (Relation)"] ??
-                                    row["Gérant"] ??
-                                    row["Responsable"] ??
-                                    row.gerant ??
-                                    row.responsable ??
-                                    ''
-                                ).toString().trim();
-
-                                return {
-                                    id_client: inscriptionId,
-                                    contact: contact,
-                                    email: email,
-                                    gerant: gerant,
-                                    source: 'import',
-                                    present: false,
-                                    datePresence: null,
-                                    modeValidation: null
-                                };
-                            })
-                            .filter(p => p !== null);
-
-                        console.log('✅ Participants extraits:', imported.length);
-
-                        if (imported.length === 0) {
-                            alert('⚠️ Aucun participant trouvé avec un ID d\'inscription valide.\n\nVérifiez que votre fichier contient une colonne "ID d\'inscription".');
-                            setImporting(false);
-                            return;
-                        }
-
-                        // Supprimer les doublons
-                        const uniqueParticipants = imported.filter((p, index, self) =>
-                            index === self.findIndex(t => t.id_client === p.id_client)
-                        );
-
-                        const duplicatesCount = imported.length - uniqueParticipants.length;
-                        
-                        setParticipants(uniqueParticipants);
-                        
-                        let message = `✅ ${uniqueParticipants.length} participants importés avec succès`;
-                        if (duplicatesCount > 0) {
-                            message += `\n⚠️ ${duplicatesCount} doublon(s) supprimé(s)`;
-                        }
-                        alert(message);
-                        
-                    } catch (error) {
-                        console.error('❌ Erreur d\'import:', error);
-                        alert(`❌ Erreur lors de l'import du fichier Excel:\n\n${error.message}\n\nVérifiez que le fichier est bien au format Excel (.xlsx ou .xls)`);
-                    } finally {
-                        setImporting(false);
+                    if (!rawId) {
+                        console.warn(`⚠️ Ligne ${index + 1}: Pas d'ID d'inscription`);
+                        return null;
                     }
-                };
 
-                reader.onerror = () => {
-                    alert('❌ Erreur lors de la lecture du fichier');
-                    setImporting(false);
-                };
+                    const inscriptionId = String(rawId).trim();
 
-                reader.readAsArrayBuffer(file);
-            };
+                    // Contact
+                    const contact = (
+                        row["Contact"] ??
+                        row["Nom"] ??
+                        row["Nom complet"] ??
+                        row.contact ??
+                        row.nom ??
+                        ''
+                    ).toString().trim();
+
+                    // Email
+                    const email = (
+                        row["Adresse email (Contact) (Relation)"] ??
+                        row["Adresse email"] ??
+                        row["Email"] ??
+                        row["E-mail"] ??
+                        row["Mail"] ??
+                        row.email ??
+                        row.mail ??
+                        ''
+                    ).toString().trim();
+
+                    // Gérant
+                    const gerant = (
+                        row["Gérant (Contact) (Relation)"] ??
+                        row["Gérant"] ??
+                        row["Responsable"] ??
+                        row.gerant ??
+                        row.responsable ??
+                        ''
+                    ).toString().trim();
+
+                    return {
+                        id_client: inscriptionId,
+                        contact: contact,
+                        email: email,
+                        gerant: gerant,
+                        source: 'import',
+                        present: false,
+                        datePresence: null,
+                        modeValidation: null
+                    };
+                })
+                .filter(p => p !== null);
+
+            console.log('✅ Participants extraits:', imported.length);
+
+            if (imported.length === 0) {
+                alert(
+                    '⚠️ Aucun participant trouvé avec un ID d\'inscription valide.\n\n' +
+                    'Vérifiez que votre fichier contient bien une colonne "ID d\'inscription" ' +
+                    '(avec ou sans apostrophe typographique).'
+                );
+                setImporting(false);
+                return;
+            }
+
+            // ✅ Suppression des doublons
+            const uniqueParticipants = imported.filter((p, index, self) =>
+                index === self.findIndex(t => t.id_client === p.id_client)
+            );
+
+            const duplicatesCount = imported.length - uniqueParticipants.length;
+            
+            setParticipants(uniqueParticipants);
+            
+            let message = `✅ ${uniqueParticipants.length} participants importés avec succès`;
+            if (duplicatesCount > 0) {
+                message += `\n⚠️ ${duplicatesCount} doublon(s) supprimé(s)`;
+            }
+            alert(message);
+            
+        } catch (error) {
+            console.error('❌ Erreur d\'import:', error);
+            alert(
+                `❌ Erreur lors de l'import du fichier Excel:\n\n${error.message}\n\n` +
+                'Vérifiez que le fichier est bien lisible (Excel ou CSV).'
+            );
+        } finally {
+            setImporting(false);
+        }
+    };
+
+    reader.onerror = () => {
+        alert('❌ Erreur lors de la lecture du fichier');
+        setImporting(false);
+    };
+
+    reader.readAsArrayBuffer(file);
+};
+
 
             return (
                 <div className="min-h-screen bg-gray-50">
