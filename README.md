@@ -198,6 +198,3 @@ Usage libre pour un usage personnel ou professionnel.
 
 ---
 
-**Version:** 1.0.0  
-**Dernière mise à jour:** Décembre 2025  
-**Développé pour:** Cyrus Herez
