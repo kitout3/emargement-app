@@ -1,0 +1,1383 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyrus Herez - Gestion d'Émargement</title>
+    <meta name="description" content="Application de gestion d'émargement pour événements">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#2563eb">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <style>
+        /* Styles pour améliorer l'UX mobile */
+        body {
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        
+        input, textarea, button {
+            -webkit-user-select: text;
+            user-select: text;
+        }
+        
+        .app-container {
+            max-width: 100vw;
+            overflow-x: hidden;
+        }
+        
+        /* Animation de feedback */
+        @keyframes pulse-success {
+            0%, 100% { background-color: rgb(220, 252, 231); }
+            50% { background-color: rgb(187, 247, 208); }
+        }
+        
+        .pulse-success {
+            animation: pulse-success 0.5s ease-in-out;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // Système de stockage amélioré avec sauvegarde automatique
+        const Storage = {
+            // Clés de stockage
+            EVENTS_KEY: 'emargement_events',
+            BACKUP_KEY: 'emargement_backup',
+            LAST_SYNC_KEY: 'emargement_last_sync',
+            
+            // Récupérer les événements
+            getEvents: () => {
+                try {
+                    const data = localStorage.getItem(Storage.EVENTS_KEY);
+                    return data ? JSON.parse(data) : [];
+                } catch (error) {
+                    console.error('Erreur lors de la récupération des événements:', error);
+                    return Storage.getBackup() || [];
+                }
+            },
+            
+            // Sauvegarder les événements avec backup automatique
+            saveEvents: (events) => {
+                try {
+                    const data = JSON.stringify(events);
+                    localStorage.setItem(Storage.EVENTS_KEY, data);
+                    // Créer une sauvegarde
+                    localStorage.setItem(Storage.BACKUP_KEY, data);
+                    localStorage.setItem(Storage.LAST_SYNC_KEY, new Date().toISOString());
+                    return true;
+                } catch (error) {
+                    console.error('Erreur lors de la sauvegarde des événements:', error);
+                    alert('Erreur de sauvegarde. Vérifiez l\'espace de stockage disponible.');
+                    return false;
+                }
+            },
+            
+            // Récupérer les participants d'un événement
+            getParticipants: (eventId) => {
+                try {
+                    const key = `participants_${eventId}`;
+                    const data = localStorage.getItem(key);
+                    return data ? JSON.parse(data) : [];
+                } catch (error) {
+                    console.error('Erreur lors de la récupération des participants:', error);
+                    return [];
+                }
+            },
+            
+            // Sauvegarder les participants avec backup
+            saveParticipants: (eventId, participants) => {
+                try {
+                    const key = `participants_${eventId}`;
+                    const data = JSON.stringify(participants);
+                    localStorage.setItem(key, data);
+                    // Backup des participants
+                    localStorage.setItem(`${key}_backup`, data);
+                    return true;
+                } catch (error) {
+                    console.error('Erreur lors de la sauvegarde des participants:', error);
+                    return false;
+                }
+            },
+            
+            // Récupérer la sauvegarde
+            getBackup: () => {
+                try {
+                    const data = localStorage.getItem(Storage.BACKUP_KEY);
+                    return data ? JSON.parse(data) : null;
+                } catch (error) {
+                    console.error('Erreur lors de la récupération du backup:', error);
+                    return null;
+                }
+            },
+            
+            // Exporter toutes les données (pour sauvegarde manuelle)
+            exportAllData: () => {
+                const allData = {
+                    events: Storage.getEvents(),
+                    participants: {},
+                    exportDate: new Date().toISOString(),
+                    version: '1.0'
+                };
+                
+                // Récupérer tous les participants de tous les événements
+                allData.events.forEach(event => {
+                    allData.participants[event.id] = Storage.getParticipants(event.id);
+                });
+                
+                return allData;
+            },
+            
+            // Importer toutes les données
+            importAllData: (data) => {
+                try {
+                    if (data.events) {
+                        Storage.saveEvents(data.events);
+                    }
+                    if (data.participants) {
+                        Object.keys(data.participants).forEach(eventId => {
+                            Storage.saveParticipants(eventId, data.participants[eventId]);
+                        });
+                    }
+                    return true;
+                } catch (error) {
+                    console.error('Erreur lors de l\'importation des données:', error);
+                    return false;
+                }
+            },
+            
+            // Vérifier l'espace de stockage disponible
+            checkStorageSpace: () => {
+                if ('storage' in navigator && 'estimate' in navigator.storage) {
+                    return navigator.storage.estimate().then(estimate => {
+                        const percentUsed = (estimate.usage / estimate.quota) * 100;
+                        return {
+                            used: estimate.usage,
+                            quota: estimate.quota,
+                            percentUsed: percentUsed.toFixed(2)
+                        };
+                    });
+                }
+                return Promise.resolve(null);
+            },
+            
+            // Nettoyer les anciennes données
+            cleanOldBackups: () => {
+                const keys = Object.keys(localStorage);
+                const backupKeys = keys.filter(key => key.includes('_backup'));
+                console.log(`Nettoyage de ${backupKeys.length} sauvegardes`);
+            }
+        };
+
+        // Composant principal
+        function App() {
+            const [view, setView] = useState('home');
+            const [events, setEvents] = useState([]);
+            const [currentEvent, setCurrentEvent] = useState(null);
+            const [storageInfo, setStorageInfo] = useState(null);
+
+            useEffect(() => {
+                // Charger les événements au démarrage
+                setEvents(Storage.getEvents());
+                
+                // Vérifier l'espace de stockage
+                Storage.checkStorageSpace().then(info => {
+                    if (info) {
+                        setStorageInfo(info);
+                        // Alerter si l'espace est faible
+                        if (info.percentUsed > 80) {
+                            console.warn('Attention: Espace de stockage faible');
+                        }
+                    }
+                });
+                
+                // Enregistrer le service worker pour le mode hors ligne
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.register('sw.js').catch(err => {
+                        console.log('Service Worker non disponible:', err);
+                    });
+                }
+            }, []);
+
+            const saveEvents = (newEvents) => {
+                if (Storage.saveEvents(newEvents)) {
+                    setEvents(newEvents);
+                }
+            };
+
+            const createEvent = (eventData) => {
+                const newEvent = {
+                    id: Date.now().toString(),
+                    ...eventData,
+                    createdAt: new Date().toISOString()
+                };
+                saveEvents([...events, newEvent]);
+                return newEvent;
+            };
+
+            const deleteEvent = (eventId) => {
+                if (confirm('Êtes-vous sûr de vouloir supprimer cet événement ? Cette action est irréversible.')) {
+                    saveEvents(events.filter(e => e.id !== eventId));
+                    localStorage.removeItem(`participants_${eventId}`);
+                    localStorage.removeItem(`participants_${eventId}_backup`);
+                }
+            };
+
+            if (view === 'home') {
+                return <HomePage 
+                    events={events} 
+                    onCreateEvent={() => setView('create')}
+                    onViewEvent={(event) => {
+                        setCurrentEvent(event);
+                        setView('detail');
+                    }}
+                    onDeleteEvent={deleteEvent}
+                    onSettings={() => setView('settings')}
+                    storageInfo={storageInfo}
+                />;
+            }
+
+            if (view === 'create') {
+                return <CreateEventPage 
+                    onBack={() => setView('home')}
+                    onCreate={(eventData) => {
+                        const newEvent = createEvent(eventData);
+                        setCurrentEvent(newEvent);
+                        setView('detail');
+                        return newEvent;
+                    }}
+                />;
+            }
+
+            if (view === 'detail' && currentEvent) {
+                return <EventDetailPage 
+                    event={currentEvent}
+                    onBack={() => {
+                        setView('home');
+                        setCurrentEvent(null);
+                    }}
+                    onScanQR={() => setView('scanner')}
+                />;
+            }
+
+            if (view === 'scanner' && currentEvent) {
+                return <QRScannerPage 
+                    event={currentEvent}
+                    onBack={() => setView('detail')}
+                />;
+            }
+
+            if (view === 'settings') {
+                return <SettingsPage 
+                    onBack={() => setView('home')}
+                    storageInfo={storageInfo}
+                />;
+            }
+
+            return null;
+        }
+
+        // Page d'accueil
+        function HomePage({ events, onCreateEvent, onViewEvent, onDeleteEvent, onSettings, storageInfo }) {
+            const [search, setSearch] = useState('');
+            const [statusFilter, setStatusFilter] = useState('all');
+
+            const getEventStatus = (event) => {
+                const now = new Date();
+                const eventDate = new Date(event.date);
+                const dayDiff = Math.floor((eventDate - now) / (1000 * 60 * 60 * 24));
+
+                if (dayDiff < 0) return 'terminé';
+                if (dayDiff === 0) return 'en cours';
+                return 'à venir';
+            };
+
+            const filteredEvents = events.filter(event => {
+                const matchSearch = event.name.toLowerCase().includes(search.toLowerCase()) ||
+                                  (event.lieu || '').toLowerCase().includes(search.toLowerCase());
+                const matchStatus = statusFilter === 'all' || getEventStatus(event) === statusFilter;
+                return matchSearch && matchStatus;
+            });
+
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    <div className="max-w-7xl mx-auto p-6">
+                        <div className="mb-8 flex items-center justify-between">
+                            <div>
+                                <h1 className="text-3xl font-bold text-gray-900 mb-2">Gestion d'Émargement</h1>
+                                <p className="text-gray-600">Gérez vos événements et suivez les présences en temps réel</p>
+                            </div>
+                            <button
+                                onClick={onSettings}
+                                className="px-4 py-2 text-gray-600 hover:text-gray-900 transition"
+                                title="Paramètres"
+                            >
+                                ⚙️
+                            </button>
+                        </div>
+
+                        {storageInfo && storageInfo.percentUsed > 70 && (
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+                                <p className="text-yellow-800">
+                                    ⚠️ Espace de stockage utilisé: {storageInfo.percentUsed}%
+                                </p>
+                            </div>
+                        )}
+
+                        <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+                            <div className="flex flex-col md:flex-row gap-4 mb-4">
+                                <input
+                                    type="text"
+                                    placeholder="Rechercher un événement..."
+                                    value={search}
+                                    onChange={(e) => setSearch(e.target.value)}
+                                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                />
+                                <select
+                                    value={statusFilter}
+                                    onChange={(e) => setStatusFilter(e.target.value)}
+                                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                >
+                                    <option value="all">Tous les statuts</option>
+                                    <option value="à venir">À venir</option>
+                                    <option value="en cours">En cours</option>
+                                    <option value="terminé">Terminé</option>
+                                </select>
+                                <button
+                                    onClick={onCreateEvent}
+                                    className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                                >
+                                    + Créer un événement
+                                </button>
+                            </div>
+                        </div>
+
+                        {filteredEvents.length === 0 ? (
+                            <div className="bg-white rounded-lg shadow-sm p-12 text-center">
+                                <p className="text-gray-500 text-lg mb-4">Aucun événement trouvé</p>
+                                <button
+                                    onClick={onCreateEvent}
+                                    className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                                >
+                                    Créer votre premier événement
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="grid gap-4">
+                                {filteredEvents.map(event => {
+                                    const participants = Storage.getParticipants(event.id);
+                                    const presents = participants.filter(p => p.present).length;
+                                    const status = getEventStatus(event);
+                                    
+                                    return (
+                                        <div key={event.id} className="bg-white rounded-lg shadow-sm p-6 hover:shadow-md transition">
+                                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-3 mb-2">
+                                                        <h3 className="text-xl font-semibold text-gray-900">{event.name}</h3>
+                                                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                                                            status === 'en cours' ? 'bg-green-100 text-green-800' :
+                                                            status === 'à venir' ? 'bg-blue-100 text-blue-800' :
+                                                            'bg-gray-100 text-gray-800'
+                                                        }`}>
+                                                            {status}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-4 text-sm text-gray-600">
+                                                        <span>📅 {new Date(event.date).toLocaleDateString('fr-FR')}</span>
+                                                        {event.lieu && <span>📍 {event.lieu}</span>}
+                                                        <span>👥 {participants.length} inscrits</span>
+                                                        <span className="text-green-600 font-medium">✓ {presents} présents</span>
+                                                        {event.capacite && (
+                                                            <span>📊 {Math.round((presents / event.capacite) * 100)}% remplissage</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <button
+                                                        onClick={() => onViewEvent(event)}
+                                                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                                                    >
+                                                        Gérer
+                                                    </button>
+                                                    <button
+                                                        onClick={() => onDeleteEvent(event.id)}
+                                                        className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
+                                                    >
+                                                        Supprimer
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // Page de création d'événement
+        function CreateEventPage({ onBack, onCreate }) {
+            const [formData, setFormData] = useState({
+                name: '',
+                date: '',
+                lieu: '',
+                capacite: '',
+                description: ''
+            });
+            const [participants, setParticipants] = useState([]);
+            const [importing, setImporting] = useState(false);
+            const [autoEventName, setAutoEventName] = useState('');
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                const eventName = formData.name || autoEventName;
+                if (!eventName || !formData.date) {
+                    alert('Veuillez remplir les champs obligatoires (nom et date)');
+                    return;
+                }
+                const event = onCreate({...formData, name: eventName});
+                if (participants.length > 0) {
+                    Storage.saveParticipants(event.id, participants);
+                }
+            };
+
+            const handleFileUpload = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                // Vérifier le type de fichier
+                const validTypes = [
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    'application/vnd.ms-excel',
+                    'application/vnd.oasis.opendocument.spreadsheet'
+                ];
+                
+                if (!validTypes.includes(file.type) && !file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
+                    alert('⚠️ Veuillez sélectionner un fichier Excel (.xlsx ou .xls)');
+                    return;
+                }
+
+                setImporting(true);
+                const reader = new FileReader();
+                
+                reader.onload = (evt) => {
+                    try {
+                        const data = new Uint8Array(evt.target.result);
+                        const workbook = XLSX.read(data, { type: 'array' });
+                        
+                        if (!workbook.SheetNames.length) {
+                            throw new Error('Le fichier Excel est vide');
+                        }
+                        
+                        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                        const rows = XLSX.utils.sheet_to_json(firstSheet);
+
+                        console.log('📊 Nombre de lignes trouvées:', rows.length);
+                        
+                        if (rows.length === 0) {
+                            alert('⚠️ Le fichier Excel ne contient aucune donnée');
+                            setImporting(false);
+                            return;
+                        }
+
+                        // Détecter le nom de l'événement
+                        if (rows.length > 0 && rows[0]['Événement']) {
+                            const eventName = rows[0]['Événement'];
+                            setAutoEventName(eventName);
+                            setFormData({...formData, name: eventName});
+                            console.log('✅ Événement détecté:', eventName);
+                        }
+
+                        // Log des colonnes disponibles pour debug
+                        console.log('📋 Colonnes détectées:', Object.keys(rows[0]));
+
+                        const imported = rows
+                            .map((row, index) => {
+                                // Recherche flexible de l'ID d'inscription
+                                const rawId =
+                                    row["ID d'inscription"] ??
+                                    row["Id d'inscription"] ??
+                                    row["ID Inscription"] ??
+                                    row["Id Inscription"] ??
+                                    row["ID_inscription"] ??
+                                    row["id_inscription"] ??
+                                    row.ID ??
+                                    row.id;
+
+                                if (!rawId) {
+                                    console.warn(`⚠️ Ligne ${index + 1}: Pas d'ID d'inscription`);
+                                    return null;
+                                }
+
+                                const inscriptionId = String(rawId).trim();
+
+                                // Recherche flexible du contact
+                                const contact = (
+                                    row["Contact"] ?? 
+                                    row["Nom"] ?? 
+                                    row["Nom complet"] ?? 
+                                    row.contact ?? 
+                                    row.nom ?? 
+                                    ''
+                                ).toString().trim();
+
+                                // Recherche flexible de l'email
+                                const email = (
+                                    row["Adresse email (Contact) (Relation)"] ??
+                                    row["Adresse email"] ??
+                                    row["Email"] ??
+                                    row["E-mail"] ??
+                                    row["Mail"] ??
+                                    row.email ??
+                                    row.mail ??
+                                    ''
+                                ).toString().trim();
+
+                                // Recherche flexible du gérant
+                                const gerant = (
+                                    row["Gérant (Contact) (Relation)"] ??
+                                    row["Gérant"] ??
+                                    row["Responsable"] ??
+                                    row.gerant ??
+                                    row.responsable ??
+                                    ''
+                                ).toString().trim();
+
+                                return {
+                                    id_client: inscriptionId,
+                                    contact: contact,
+                                    email: email,
+                                    gerant: gerant,
+                                    source: 'import',
+                                    present: false,
+                                    datePresence: null,
+                                    modeValidation: null
+                                };
+                            })
+                            .filter(p => p !== null);
+
+                        console.log('✅ Participants extraits:', imported.length);
+
+                        if (imported.length === 0) {
+                            alert('⚠️ Aucun participant trouvé avec un ID d\'inscription valide.\n\nVérifiez que votre fichier contient une colonne "ID d\'inscription".');
+                            setImporting(false);
+                            return;
+                        }
+
+                        // Supprimer les doublons
+                        const uniqueParticipants = imported.filter((p, index, self) =>
+                            index === self.findIndex(t => t.id_client === p.id_client)
+                        );
+
+                        const duplicatesCount = imported.length - uniqueParticipants.length;
+                        
+                        setParticipants(uniqueParticipants);
+                        
+                        let message = `✅ ${uniqueParticipants.length} participants importés avec succès`;
+                        if (duplicatesCount > 0) {
+                            message += `\n⚠️ ${duplicatesCount} doublon(s) supprimé(s)`;
+                        }
+                        alert(message);
+                        
+                    } catch (error) {
+                        console.error('❌ Erreur d\'import:', error);
+                        alert(`❌ Erreur lors de l'import du fichier Excel:\n\n${error.message}\n\nVérifiez que le fichier est bien au format Excel (.xlsx ou .xls)`);
+                    } finally {
+                        setImporting(false);
+                    }
+                };
+
+                reader.onerror = () => {
+                    alert('❌ Erreur lors de la lecture du fichier');
+                    setImporting(false);
+                };
+
+                reader.readAsArrayBuffer(file);
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    <div className="max-w-4xl mx-auto p-6">
+                        <button onClick={onBack} className="mb-6 text-blue-600 hover:text-blue-700 flex items-center gap-2">
+                            ← Retour à la liste
+                        </button>
+
+                        <div className="bg-white rounded-lg shadow-sm p-8">
+                            <h2 className="text-2xl font-bold text-gray-900 mb-6">Créer un nouvel événement</h2>
+
+                            <form onSubmit={handleSubmit} className="space-y-6">
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Nom de l'événement {autoEventName && '(détecté automatiquement)'}
+                                    </label>
+                                    <input
+                                        type="text"
+                                        required
+                                        value={formData.name}
+                                        onChange={(e) => setFormData({...formData, name: e.target.value})}
+                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                        placeholder={autoEventName ? `Nom détecté: ${autoEventName}` : 'Nom de l\'événement'}
+                                    />
+                                    {autoEventName && (
+                                        <p className="text-sm text-green-600 mt-1">
+                                            ✓ Nom d'événement détecté dans le fichier Excel
+                                        </p>
+                                    )}
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Date de l'événement *
+                                    </label>
+                                    <input
+                                        type="datetime-local"
+                                        required
+                                        value={formData.date}
+                                        onChange={(e) => setFormData({...formData, date: e.target.value})}
+                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Lieu
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={formData.lieu}
+                                        onChange={(e) => setFormData({...formData, lieu: e.target.value})}
+                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Capacité maximale
+                                    </label>
+                                    <input
+                                        type="number"
+                                        value={formData.capacite}
+                                        onChange={(e) => setFormData({...formData, capacite: e.target.value})}
+                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Description
+                                    </label>
+                                    <textarea
+                                        value={formData.description}
+                                        onChange={(e) => setFormData({...formData, description: e.target.value})}
+                                        rows="3"
+                                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                                    />
+                                </div>
+
+                                <div className="border-t pt-6">
+                                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Importer les inscrits</h3>
+                                    <div className="flex items-center gap-4 mb-4">
+                                        <label className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer transition">
+                                            📁 Choisir un fichier Excel
+                                            <input
+                                                type="file"
+                                                accept=".xlsx,.xls"
+                                                onChange={handleFileUpload}
+                                                className="hidden"
+                                            />
+                                        </label>
+                                        {importing && (
+                                            <span className="text-blue-600 font-medium">
+                                                ⏳ Import en cours...
+                                            </span>
+                                        )}
+                                        {participants.length > 0 && !importing && (
+                                            <span className="text-green-600 font-medium">
+                                                ✓ {participants.length} participants importés
+                                            </span>
+                                        )}
+                                    </div>
+                                    <p className="text-sm text-gray-500 mb-4">
+                                        Le fichier doit contenir : ID d'inscription, Contact, Gérant, Email
+                                    </p>
+                                    
+                                    {participants.length > 0 && (
+                                        <div className="border rounded-lg overflow-hidden">
+                                            <div className="bg-gray-50 px-4 py-3 border-b">
+                                                <h4 className="font-semibold text-gray-700">Aperçu des participants importés</h4>
+                                            </div>
+                                            <div className="max-h-96 overflow-y-auto">
+                                                <table className="w-full">
+                                                    <thead className="bg-gray-100 sticky top-0">
+                                                        <tr>
+                                                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">ID d'inscription</th>
+                                                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">Contact</th>
+                                                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">Gérant</th>
+                                                            <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">Email</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-gray-200">
+                                                        {participants.map((p, idx) => (
+                                                            <tr key={idx} className="hover:bg-gray-50">
+                                                                <td className="px-4 py-2 text-xs text-gray-500 font-mono">{p.id_client}</td>
+                                                                <td className="px-4 py-2 text-sm text-gray-900 font-medium">{p.contact}</td>
+                                                                <td className="px-4 py-2 text-sm text-gray-600">{p.gerant}</td>
+                                                                <td className="px-4 py-2 text-sm text-gray-600">{p.email}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="flex gap-4 pt-6">
+                                    <button
+                                        type="submit"
+                                        className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
+                                    >
+                                        Créer l'événement
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={onBack}
+                                        className="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+                                    >
+                                        Annuler
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // Page de détail d'événement
+        function EventDetailPage({ event, onBack, onScanQR }) {
+            const [participants, setParticipants] = useState([]);
+            const [search, setSearch] = useState('');
+            const [filter, setFilter] = useState('all');
+            const [showAddForm, setShowAddForm] = useState(false);
+            const [newParticipant, setNewParticipant] = useState({
+                contact: '',
+                gerant: '',
+                email: '',
+                id_client: ''
+            });
+
+            useEffect(() => {
+                setParticipants(Storage.getParticipants(event.id));
+            }, [event.id]);
+
+            const saveParticipants = (newParticipants) => {
+                Storage.saveParticipants(event.id, newParticipants);
+                setParticipants(newParticipants);
+            };
+
+            const markPresent = (participantId) => {
+                const updated = participants.map(p => 
+                    p.id_client === participantId && !p.present
+                        ? { ...p, present: true, datePresence: new Date().toISOString(), modeValidation: 'manuel' }
+                        : p
+                );
+                saveParticipants(updated);
+            };
+
+            const cancelPresence = (participantId) => {
+                if (confirm('Annuler l\'émargement de ce participant ?')) {
+                    const updated = participants.map(p => 
+                        p.id_client === participantId
+                            ? { ...p, present: false, datePresence: null, modeValidation: null }
+                            : p
+                    );
+                    saveParticipants(updated);
+                }
+            };
+
+            const addParticipant = (markAsPresent) => {
+                if (!newParticipant.contact) {
+                    alert('Veuillez remplir le nom du contact');
+                    return;
+                }
+
+                const participant = {
+                    id_client: newParticipant.id_client || `MANUAL_${Date.now()}`,
+                    contact: newParticipant.contact,
+                    email: newParticipant.email,
+                    gerant: newParticipant.gerant,
+                    source: 'manuel',
+                    present: markAsPresent,
+                    datePresence: markAsPresent ? new Date().toISOString() : null,
+                    modeValidation: markAsPresent ? 'manuel' : null
+                };
+
+                saveParticipants([...participants, participant]);
+                setNewParticipant({ contact: '', gerant: '', email: '', id_client: '' });
+                setShowAddForm(false);
+            };
+
+            const exportToExcel = (type) => {
+                let dataToExport = participants;
+                
+                if (type === 'presents') dataToExport = participants.filter(p => p.present);
+                else if (type === 'absents') dataToExport = participants.filter(p => !p.present);
+                else if (type === 'manuels') dataToExport = participants.filter(p => p.source === 'manuel');
+
+                const ws = XLSX.utils.json_to_sheet(dataToExport.map(p => ({
+                    'ID Client': p.id_client,
+                    'Contact': p.contact,
+                    'Gérant': p.gerant,
+                    'Email': p.email,
+                    'Statut': p.present ? 'Présent' : 'Absent',
+                    'Date de présence': p.datePresence ? new Date(p.datePresence).toLocaleString('fr-FR') : '',
+                    'Mode de validation': p.modeValidation || '',
+                    'Source': p.source
+                })));
+
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, 'Participants');
+                XLSX.writeFile(wb, `${event.name}_${type}_${new Date().toISOString().split('T')[0]}.xlsx`);
+            };
+
+            const filteredParticipants = participants.filter(p => {
+                const matchSearch = 
+                    (p.contact || '').toLowerCase().includes(search.toLowerCase()) ||
+                    (p.gerant || '').toLowerCase().includes(search.toLowerCase()) ||
+                    (p.email || '').toLowerCase().includes(search.toLowerCase()) ||
+                    p.id_client.toLowerCase().includes(search.toLowerCase());
+                
+                const matchFilter = 
+                    filter === 'all' ||
+                    (filter === 'present' && p.present) ||
+                    (filter === 'absent' && !p.present) ||
+                    (filter === 'manual' && p.source === 'manuel');
+
+                return matchSearch && matchFilter;
+            });
+
+            const stats = {
+                total: participants.length,
+                presents: participants.filter(p => p.present).length,
+                manuels: participants.filter(p => p.source === 'manuel').length
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    <div className="max-w-7xl mx-auto p-6">
+                        <button onClick={onBack} className="mb-6 text-blue-600 hover:text-blue-700 flex items-center gap-2">
+                            ← Retour à la liste
+                        </button>
+
+                        <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+                            <h1 className="text-2xl font-bold text-gray-900 mb-2">{event.name}</h1>
+                            <div className="flex flex-wrap gap-4 text-sm text-gray-600 mb-4">
+                                <span>📅 {new Date(event.date).toLocaleString('fr-FR')}</span>
+                                {event.lieu && <span>📍 {event.lieu}</span>}
+                            </div>
+
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                <div className="bg-blue-50 p-4 rounded-lg">
+                                    <div className="text-2xl font-bold text-blue-600">{stats.total}</div>
+                                    <div className="text-sm text-gray-600">Inscrits</div>
+                                </div>
+                                <div className="bg-green-50 p-4 rounded-lg">
+                                    <div className="text-2xl font-bold text-green-600">{stats.presents}</div>
+                                    <div className="text-sm text-gray-600">Présents</div>
+                                </div>
+                                <div className="bg-purple-50 p-4 rounded-lg">
+                                    <div className="text-2xl font-bold text-purple-600">
+                                        {stats.total > 0 ? Math.round((stats.presents / stats.total) * 100) : 0}%
+                                    </div>
+                                    <div className="text-sm text-gray-600">Taux de présence</div>
+                                </div>
+                                <div className="bg-orange-50 p-4 rounded-lg">
+                                    <div className="text-2xl font-bold text-orange-600">{stats.manuels}</div>
+                                    <div className="text-sm text-gray-600">Ajouts manuels</div>
+                                </div>
+                            </div>
+
+                            <div className="flex flex-wrap gap-3">
+                                <button
+                                    onClick={onScanQR}
+                                    className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium"
+                                >
+                                    📷 Scanner QR Code
+                                </button>
+                                <button
+                                    onClick={() => setShowAddForm(!showAddForm)}
+                                    className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                                >
+                                    + Ajouter un participant
+                                </button>
+                                <div className="relative group">
+                                    <button className="px-6 py-3 bg-gray-700 text-white rounded-lg hover:bg-gray-800 transition">
+                                        📥 Exporter Excel
+                                    </button>
+                                    <div className="absolute top-full mt-2 right-0 bg-white shadow-lg rounded-lg overflow-hidden hidden group-hover:block z-10">
+                                        <button onClick={() => exportToExcel('all')} className="block w-full px-4 py-2 text-left hover:bg-gray-100 whitespace-nowrap">Tous</button>
+                                        <button onClick={() => exportToExcel('presents')} className="block w-full px-4 py-2 text-left hover:bg-gray-100">Présents</button>
+                                        <button onClick={() => exportToExcel('absents')} className="block w-full px-4 py-2 text-left hover:bg-gray-100">Absents</button>
+                                        <button onClick={() => exportToExcel('manuels')} className="block w-full px-4 py-2 text-left hover:bg-gray-100">Ajouts manuels</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {showAddForm && (
+                            <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+                                <h3 className="text-lg font-semibold mb-4">Ajouter un participant</h3>
+                                <div className="grid md:grid-cols-2 gap-4 mb-4">
+                                    <input
+                                        type="text"
+                                        placeholder="Contact / Nom *"
+                                        value={newParticipant.contact}
+                                        onChange={(e) => setNewParticipant({...newParticipant, contact: e.target.value})}
+                                        className="px-4 py-2 border border-gray-300 rounded-lg"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Gérant"
+                                        value={newParticipant.gerant}
+                                        onChange={(e) => setNewParticipant({...newParticipant, gerant: e.target.value})}
+                                        className="px-4 py-2 border border-gray-300 rounded-lg"
+                                    />
+                                    <input
+                                        type="email"
+                                        placeholder="Email"
+                                        value={newParticipant.email}
+                                        onChange={(e) => setNewParticipant({...newParticipant, email: e.target.value})}
+                                        className="px-4 py-2 border border-gray-300 rounded-lg"
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="ID Client (optionnel)"
+                                        value={newParticipant.id_client}
+                                        onChange={(e) => setNewParticipant({...newParticipant, id_client: e.target.value})}
+                                        className="px-4 py-2 border border-gray-300 rounded-lg"
+                                    />
+                                </div>
+                                <div className="flex gap-3">
+                                    <button
+                                        onClick={() => addParticipant(true)}
+                                        className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                                    >
+                                        Ajouter et marquer présent
+                                    </button>
+                                    <button
+                                        onClick={() => addParticipant(false)}
+                                        className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                                    >
+                                        Ajouter sans marquer présent
+                                    </button>
+                                    <button
+                                        onClick={() => setShowAddForm(false)}
+                                        className="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                                    >
+                                        Annuler
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="bg-white rounded-lg shadow-sm p-6">
+                            <div className="flex flex-col md:flex-row gap-4 mb-6">
+                                <input
+                                    type="text"
+                                    placeholder="Rechercher un participant..."
+                                    value={search}
+                                    onChange={(e) => setSearch(e.target.value)}
+                                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg"
+                                />
+                                <select
+                                    value={filter}
+                                    onChange={(e) => setFilter(e.target.value)}
+                                    className="px-4 py-2 border border-gray-300 rounded-lg"
+                                >
+                                    <option value="all">Tous</option>
+                                    <option value="present">Présents</option>
+                                    <option value="absent">Absents</option>
+                                    <option value="manual">Ajouts manuels</option>
+                                </select>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {filteredParticipants.map(p => (
+                                    <div key={p.id_client} className="bg-white border-2 border-gray-200 rounded-lg p-4 hover:shadow-lg hover:border-blue-300 transition">
+                                        <div className="mb-3">
+                                            <h4 className="font-bold text-gray-900 text-lg mb-2">
+                                                {p.contact}
+                                            </h4>
+                                            {p.gerant && (
+                                                <p className="text-sm text-gray-700 mb-1 flex items-center gap-1">
+                                                    <span className="font-medium">👤 Gérant:</span> {p.gerant}
+                                                </p>
+                                            )}
+                                            {p.email && (
+                                                <p className="text-sm text-gray-700 mb-1 flex items-center gap-1">
+                                                    <span className="font-medium">✉️ Email:</span> {p.email}
+                                                </p>
+                                            )}
+                                            <p className="text-xs text-gray-400 mt-2 font-mono">
+                                                ID: {p.id_client}
+                                            </p>
+                                        </div>
+                                        
+                                        <div className="mb-3 pt-3 border-t border-gray-200">
+                                            {p.present ? (
+                                                <div>
+                                                    <span className="inline-block px-3 py-1 text-xs font-semibold text-green-800 bg-green-100 rounded-full">
+                                                        ✓ Présent
+                                                    </span>
+                                                    <div className="text-xs text-gray-500 mt-2">
+                                                        📅 {new Date(p.datePresence).toLocaleString('fr-FR')}
+                                                    </div>
+                                                    <div className="text-xs text-gray-500">
+                                                        🔖 {p.modeValidation}
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <span className="inline-block px-3 py-1 text-xs font-semibold text-gray-600 bg-gray-100 rounded-full">
+                                                    Absent
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        <div className="flex gap-2">
+                                            {p.present ? (
+                                                <button
+                                                    onClick={() => cancelPresence(p.id_client)}
+                                                    className="flex-1 px-3 py-2 text-sm text-white bg-red-600 hover:bg-red-700 rounded-lg transition font-medium"
+                                                >
+                                                    Annuler émargement
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    onClick={() => markPresent(p.id_client)}
+                                                    className="flex-1 px-3 py-2 text-sm text-white bg-green-600 hover:bg-green-700 rounded-lg transition font-medium"
+                                                >
+                                                    Marquer présent
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {filteredParticipants.length === 0 && (
+                                <div className="text-center py-12 text-gray-500">
+                                    Aucun participant trouvé
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // Page scanner QR
+        function QRScannerPage({ event, onBack }) {
+            const [scanning, setScanning] = useState(false);
+            const [lastScan, setLastScan] = useState(null);
+            const [message, setMessage] = useState('');
+            const [messageType, setMessageType] = useState('');
+            const scannerRef = useRef(null);
+
+            useEffect(() => {
+                startScanner();
+                return () => {
+                    if (scannerRef.current) {
+                        scannerRef.current.stop();
+                    }
+                };
+            }, []);
+
+            const startScanner = () => {
+                const html5QrCode = new Html5Qrcode("qr-reader");
+                scannerRef.current = html5QrCode;
+
+                html5QrCode.start(
+                    { facingMode: "environment" },
+                    { fps: 10, qrbox: { width: 250, height: 250 } },
+                    (decodedText) => {
+                        handleScan(decodedText);
+                    }
+                ).catch(err => {
+                    console.error("Erreur scanner:", err);
+                    setMessage("Impossible d'accéder à la caméra");
+                    setMessageType("error");
+                });
+
+                setScanning(true);
+            };
+
+            const handleScan = (idClient) => {
+                const participants = Storage.getParticipants(event.id);
+                const scannedId = String(idClient).trim();
+
+                const participant = participants.find(
+                    p => String(p.id_client).trim() === scannedId
+                );
+
+                if (!participant) {
+                    setMessage(`❌ ID d'inscription "${idClient}" non trouvé dans la liste`);
+                    setMessageType('error');
+                    setLastScan({ idClient, status: 'unknown' });
+                    return;
+                }
+
+                if (participant.present) {
+                    setMessage(`⚠️ ${participant.contact} déjà émargé le ${new Date(participant.datePresence).toLocaleString('fr-FR')}`);
+                    setMessageType('warning');
+                    setLastScan({ ...participant, status: 'duplicate' });
+                    return;
+                }
+
+                const updated = participants.map(p => 
+                    String(p.id_client).trim() === scannedId
+                        ? { ...p, present: true, datePresence: new Date().toISOString(), modeValidation: 'qr' }
+                        : p
+                );
+                
+                Storage.saveParticipants(event.id, updated);
+                
+                setMessage(`✅ ${participant.contact} émargé avec succès !`);
+                setMessageType('success');
+                setLastScan({ ...participant, status: 'success' });
+
+                setTimeout(() => {
+                    setMessage('');
+                    setLastScan(null);
+                }, 3000);
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-900">
+                    <div className="max-w-4xl mx-auto p-6">
+                        <button 
+                            onClick={onBack} 
+                            className="mb-6 text-white hover:text-gray-300 flex items-center gap-2"
+                        >
+                            ← Retour à l'événement
+                        </button>
+
+                        <div className="bg-white rounded-lg shadow-xl p-6 mb-6">
+                            <h2 className="text-2xl font-bold text-gray-900 mb-2">Scanner QR Code</h2>
+                            <p className="text-gray-600 mb-4">{event.name}</p>
+
+                            <div className="bg-gray-900 rounded-lg overflow-hidden mb-4">
+                                <div id="qr-reader" className="w-full"></div>
+                            </div>
+
+                            {message && (
+                                <div className={`p-4 rounded-lg mb-4 ${
+                                    messageType === 'success' ? 'bg-green-100 text-green-800' :
+                                    messageType === 'warning' ? 'bg-yellow-100 text-yellow-800' :
+                                    'bg-red-100 text-red-800'
+                                }`}>
+                                    <p className="text-lg font-semibold">{message}</p>
+                                </div>
+                            )}
+
+                            <div className="text-center text-gray-600">
+                                <p>Présentez le QR code devant la caméra</p>
+                                <p className="text-sm mt-2">Le scan se fait automatiquement</p>
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-lg shadow-lg p-6">
+                            <h3 className="text-lg font-semibold mb-4">Statistiques en temps réel</h3>
+                            {(() => {
+                                const participants = Storage.getParticipants(event.id);
+                                const presents = participants.filter(p => p.present).length;
+                                return (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="text-center p-4 bg-blue-50 rounded-lg">
+                                            <div className="text-3xl font-bold text-blue-600">{participants.length}</div>
+                                            <div className="text-sm text-gray-600">Inscrits</div>
+                                        </div>
+                                        <div className="text-center p-4 bg-green-50 rounded-lg">
+                                            <div className="text-3xl font-bold text-green-600">{presents}</div>
+                                            <div className="text-sm text-gray-600">Présents</div>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // Page de paramètres
+        function SettingsPage({ onBack, storageInfo }) {
+            const [exportMessage, setExportMessage] = useState('');
+
+            const handleExportData = () => {
+                try {
+                    const allData = Storage.exportAllData();
+                    const dataStr = JSON.stringify(allData, null, 2);
+                    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+                    const url = URL.createObjectURL(dataBlob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = `emargement_backup_${new Date().toISOString().split('T')[0]}.json`;
+                    link.click();
+                    setExportMessage('✅ Sauvegarde exportée avec succès');
+                } catch (error) {
+                    setExportMessage('❌ Erreur lors de l\'export');
+                }
+                setTimeout(() => setExportMessage(''), 3000);
+            };
+
+            const handleImportData = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (evt) => {
+                    try {
+                        const data = JSON.parse(evt.target.result);
+                        if (Storage.importAllData(data)) {
+                            setExportMessage('✅ Données importées avec succès. Rechargez la page.');
+                        } else {
+                            setExportMessage('❌ Erreur lors de l\'import');
+                        }
+                    } catch (error) {
+                        setExportMessage('❌ Fichier invalide');
+                    }
+                    setTimeout(() => setExportMessage(''), 3000);
+                };
+                reader.readAsText(file);
+            };
+
+            const handleClearAllData = () => {
+                if (confirm('⚠️ ATTENTION: Cette action supprimera TOUTES vos données (événements et participants). Cette action est IRRÉVERSIBLE. Voulez-vous continuer ?')) {
+                    if (confirm('Êtes-vous VRAIMENT sûr ? Toutes les données seront perdues définitivement.')) {
+                        localStorage.clear();
+                        setExportMessage('✅ Toutes les données ont été supprimées. Rechargez la page.');
+                        setTimeout(() => window.location.reload(), 2000);
+                    }
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    <div className="max-w-4xl mx-auto p-6">
+                        <button onClick={onBack} className="mb-6 text-blue-600 hover:text-blue-700 flex items-center gap-2">
+                            ← Retour à la liste
+                        </button>
+
+                        <div className="bg-white rounded-lg shadow-sm p-8">
+                            <h2 className="text-2xl font-bold text-gray-900 mb-6">Paramètres et Sauvegarde</h2>
+
+                            {exportMessage && (
+                                <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                                    <p className="text-blue-800">{exportMessage}</p>
+                                </div>
+                            )}
+
+                            {storageInfo && (
+                                <div className="mb-6 p-4 bg-gray-50 rounded-lg">
+                                    <h3 className="font-semibold mb-2">Espace de stockage</h3>
+                                    <div className="flex items-center gap-4">
+                                        <div className="flex-1">
+                                            <div className="w-full bg-gray-200 rounded-full h-2">
+                                                <div 
+                                                    className={`h-2 rounded-full ${
+                                                        storageInfo.percentUsed > 80 ? 'bg-red-500' :
+                                                        storageInfo.percentUsed > 60 ? 'bg-yellow-500' :
+                                                        'bg-green-500'
+                                                    }`}
+                                                    style={{ width: `${storageInfo.percentUsed}%` }}
+                                                ></div>
+                                            </div>
+                                        </div>
+                                        <span className="text-sm text-gray-600 whitespace-nowrap">
+                                            {storageInfo.percentUsed}% utilisé
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-gray-500 mt-2">
+                                        {(storageInfo.used / 1024 / 1024).toFixed(2)} MB / {(storageInfo.quota / 1024 / 1024).toFixed(2)} MB
+                                    </p>
+                                </div>
+                            )}
+
+                            <div className="space-y-6">
+                                <div className="border-t pt-6">
+                                    <h3 className="text-lg font-semibold mb-4">Sauvegarde des données</h3>
+                                    <p className="text-gray-600 mb-4">
+                                        Vos données sont automatiquement sauvegardées dans votre navigateur. 
+                                        Pour ne jamais les perdre, exportez-les régulièrement.
+                                    </p>
+                                    
+                                    <div className="flex flex-wrap gap-3">
+                                        <button
+                                            onClick={handleExportData}
+                                            className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                                        >
+                                            📥 Exporter toutes les données
+                                        </button>
+                                        
+                                        <label className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 cursor-pointer transition">
+                                            📤 Importer des données
+                                            <input
+                                                type="file"
+                                                accept=".json"
+                                                onChange={handleImportData}
+                                                className="hidden"
+                                            />
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div className="border-t pt-6">
+                                    <h3 className="text-lg font-semibold mb-4">À propos</h3>
+                                    <div className="space-y-2 text-sm text-gray-600">
+                                        <p><strong>Version:</strong> 1.0.0</p>
+                                        <p><strong>Application:</strong> Gestion d'Émargement Cyrus Herez</p>
+                                        <p><strong>Stockage:</strong> LocalStorage (navigateur)</p>
+                                        <p className="pt-2 text-xs">
+                                            💡 Conseil: Exportez régulièrement vos données pour éviter toute perte en cas de suppression du cache du navigateur.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="border-t pt-6">
+                                    <h3 className="text-lg font-semibold mb-4 text-red-600">Zone dangereuse</h3>
+                                    <button
+                                        onClick={handleClearAllData}
+                                        className="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
+                                    >
+                                        🗑️ Supprimer toutes les données
+                                    </button>
+                                    <p className="text-xs text-gray-500 mt-2">
+                                        ⚠️ Cette action est irréversible. Exportez vos données avant de continuer.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // Rendu de l'application
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
