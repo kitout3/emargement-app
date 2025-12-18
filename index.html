@@ -14,34 +14,48 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-    <style>
-        /* Styles pour améliorer l'UX mobile */
-        body {
-            -webkit-touch-callout: none;
-            -webkit-user-select: none;
-            user-select: none;
-        }
-        
-        input, textarea, button {
-            -webkit-user-select: text;
-            user-select: text;
-        }
-        
-        .app-container {
-            max-width: 100vw;
-            overflow-x: hidden;
-        }
-        
-        /* Animation de feedback */
-        @keyframes pulse-success {
-            0%, 100% { background-color: rgb(220, 252, 231); }
-            50% { background-color: rgb(187, 247, 208); }
-        }
-        
-        .pulse-success {
-            animation: pulse-success 0.5s ease-in-out;
-        }
-    </style>
+<style>
+  /* ===== Design tokens ===== */
+  :root{
+    --c-primary: #000d30;  /* bleu nuit */
+    --c-accent:  #c4b586;  /* doré/beige */
+    --c-bg:      #f1f1f1;  /* gris clair */
+    --c-white:   #ffffff;
+  }
+
+  /* Base */
+  html, body {
+    font-family: "Barlow", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: var(--c-bg);
+    color: var(--c-primary);
+  }
+
+  /* Styles pour améliorer l'UX mobile */
+  body {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  input, textarea, button {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  .app-container {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  /* Animation de feedback */
+  @keyframes pulse-success {
+    0%, 100% { background-color: rgb(220, 252, 231); }
+    50% { background-color: rgb(187, 247, 208); }
+  }
+  .pulse-success {
+    animation: pulse-success 0.5s ease-in-out;
+  }
+</style>
+
 </head>
 <body>
     <div id="root"></div>
